@@ -19,6 +19,102 @@ import pint
 from ..tube_design_tools import accessories
 
 
+
+def test_get_flange_limits_from_csv():
+    """
+    Tests the get_flange_limits_from_csv() function, which reads flange
+    pressure limits as a function of temperature for various flange classes.
+
+    Conditions tested:
+        - proper error handling with bad .csv file name
+        - imported dataframe has correct keys
+        - imported dataframe has correct values and units
+        - non-float values are properly ignored
+        - proper error handling when a pressure value is negative
+    """
+    # ----------------------------INPUT TESTING----------------------------
+    # ensure proper handling when a bad material group is requested
+
+    # provide a bad input and the error that should result from it
+    my_input = 'batman'
+    bad_output = my_input + ' is not a valid group'
+
+    # ensure the error is handled properly
+    with pytest.raises(ValueError, match=bad_output):
+        accessories.get_flange_limits_from_csv(my_input)
+
+    # ----------------------------OUTPUT TESTING---------------------------
+    # ensure proper output when a good material group is requested by
+    # comparing output to a known result
+
+    # file information
+    my_input = 'testfile'
+    file_directory = os.path.join(os.path.dirname(os.path.relpath(__file__)),
+                                  '..', 'tube_design_tools', 'lookup_data')
+    file_name = 'ASME_B16_5_flange_ratings_group_' + my_input + '.csv'
+    file_location = os.path.relpath(os.path.join(file_directory, file_name))
+
+    # incorporate units with pint
+    ureg = pint.UnitRegistry()
+    quant = ureg.Quantity
+
+    # create test dataframe and write it to a .csv file
+    test_dataframe = pd.DataFrame(data=[[0, 1],     # temperatures
+                                        [2, 3]],    # pressures
+                                  columns=['Temperature', 'Class'])
+    test_dataframe.to_csv(file_location, index=False)
+
+    # add units to test dataframe
+    test_dataframe['Temperature'] = [quant(temp, ureg.degC) for temp in
+                                     test_dataframe['Temperature']]
+    test_dataframe['Class'] = [quant(pressure, ureg.bar) for pressure in
+                               test_dataframe['Class']]
+
+    # read in test dataframe using get_flange_limits_from_csv()
+    test_result = accessories.get_flange_limits_from_csv(my_input)
+
+    # check that dataframes have the same number of keys and that they match
+    assert len(test_dataframe.keys()) == len(test_result.keys())
+    assert all(key1 == key2 for key1, key2 in zip(test_dataframe.keys(),
+                                                  test_result.keys()))
+
+    # flatten list of values and check that all dataframe values match
+    test_dataframe_values = [item for column in test_dataframe.values
+                             for item in column]
+    test_result_values = [item for column in test_result.values
+                          for item in column]
+    assert len(test_dataframe_values) == len(test_result_values)
+    assert all(val1 == val2 for val1, val2 in zip(test_dataframe_values,
+                                                  test_result_values))
+
+    # ensure rejection of tabulated pressures less than zero
+    with pytest.raises(ValueError, match='Pressure less than zero.'):
+        # create test dataframe and write it to a .csv file
+        test_dataframe = pd.DataFrame(data=[[0, 1],     # temperatures
+                                            [2, -3]],   # pressures
+                                      columns=['Temperature', 'Class'])
+        test_dataframe.to_csv(file_location, index=False)
+
+        # run the test
+        accessories.get_flange_limits_from_csv(my_input)
+
+    # create .csv to test non-numeric pressure and temperature values
+    test_temperatures = [9, 's', 'd']
+    test_pressures = ['a', 3, 'f']
+    test_dataframe = pd.DataFrame({'Temperature': test_temperatures,
+                                   'Pressure': test_pressures})
+    test_dataframe.to_csv(file_location, index=False)
+
+    # ensure non-numeric pressures and temperatures are zeroed out
+    test_limits = accessories.get_flange_limits_from_csv(my_input)
+    for index, my_temperature in enumerate(test_temperatures):
+        if isinstance(my_temperature, str):
+            assert test_limits.Temperature[index].magnitude == 0
+
+    # delete test .csv file from disk
+    os.remove(file_location)
+
+
 def test_check_materials():
     """
     Tests the check_materials function, which checks the materials_list
@@ -36,7 +132,7 @@ def test_check_materials():
     """
     file_directory = os.path.join(
         os.path.dirname(
-            os.path.abspath(__file__)
+            os.path.relpath(__file__)
         ),
         '..',
         'tube_design_tools',
@@ -91,11 +187,6 @@ def test_check_materials():
 
     # run test suite
     with patch('builtins.open', new=FakeOpen):
-        print()
-        print()
-        print(accessories.__file__)
-        print()
-        print()
         patched_module = __name__.split('.')[0] + \
             '.tube_design_tools.accessories.' + \
             'get_material_groups'
@@ -185,7 +276,7 @@ def test_collect_tube_materials():
     """
     file_directory = os.path.join(
         os.path.dirname(
-            os.path.abspath(__file__)
+            os.path.relpath(__file__)
         ),
         '..',
         'tube_design_tools',
@@ -271,7 +362,7 @@ def test_get_material_groups():
     # file information
     file_directory = os.path.join(
         os.path.dirname(
-            os.path.abspath(__file__)
+            os.path.relpath(__file__)
         ),
         '..',
         'tube_design_tools',
@@ -576,12 +667,13 @@ def test_get_pipe_dimensions():
         - bad pipe size
     """
     # good input
-    [outer_diameter,
-     inner_diameter,
-     wall_thickness] = accessories.get_pipe_dimensions(
+    dimensions = accessories.get_pipe_dimensions(
         pipe_schedule='80',
         nominal_size='6'
     )
+    outer_diameter = dimensions['outer diameter']
+    inner_diameter = dimensions['inner diameter']
+    wall_thickness = dimensions['wall thickness']
     assert outer_diameter.magnitude - 6.625 < 1e-7
     assert inner_diameter.magnitude - 5.761 < 1e-7
     assert wall_thickness.magnitude - 0.432 < 1e-7
@@ -777,3 +869,60 @@ def test_get_thread_tpi():
         - good input
     """
     assert accessories.get_thread_tpi('1/4-20') == 20
+
+
+def test_equil_sound_speed():
+    """
+    Tests get_equil_sound_speed
+    """
+    ureg = pint.UnitRegistry()
+    quant = ureg.Quantity
+
+    # check air at 1 atm and 20°C against ideal gas calculation
+    gamma = 1.4
+    rr = 8.31451
+    tt = 293.15
+    mm = 0.0289645
+    c_ideal = np.sqrt(gamma*rr*tt/mm)
+
+    temp = quant(20, 'degC')
+    press = quant(1, 'atm')
+    species = {'O2': 1, 'N2': 3.76}
+    mech = 'gri30.cti'
+    c_test = accessories.get_equil_sound_speed(
+        temp,
+        press,
+        species,
+        mech
+    )
+
+    assert abs(c_ideal - c_test.to('m/s').magnitude) / c_ideal <= 0.005
+
+
+def test_get_pipe_stress_limits():
+    material = '304'
+
+    # known values for 304
+    seamless_values = np.array([18.8, 18.8, 15.7, 14.1, 13, 12.2, 11.4, 11.3,
+                                11.1, 10.8, 10.6, 10.4, 10.2, 10, 9.8, 9.5, 8.9,
+                                7.7, 6.1])
+    welded_values = np.array([16, 16, 13.3, 12, 11, 10.5, 9.7, 9.5, 9.4, 9.2, 9,
+                              8.8, 8.7, 8.5, 8.3, 8.1, 7.6, 6.5, 5.4])
+
+    test_limits = accessories.get_pipe_stress_limits(
+        material,
+        welded=True
+    )
+    test_limits = np.array(test_limits['stress'][1])
+    assert np.allclose(welded_values, test_limits)
+
+    test_limits = accessories.get_pipe_stress_limits(
+        material,
+        welded=False
+    )
+    test_limits = np.array(test_limits['stress'][1])
+    assert np.allclose(seamless_values, test_limits)
+
+    with pytest.raises(KeyError,
+                       match='material not found'):
+        accessories.get_pipe_stress_limits('unobtainium')

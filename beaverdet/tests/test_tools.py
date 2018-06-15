@@ -11,107 +11,11 @@ CREATED BY:
 """
 
 
-import os
 from math import sqrt
 import pytest
 import pint
-import pandas as pd
+import cantera as ct
 from ..tube_design_tools import tools
-
-
-def test_get_flange_limits_from_csv():
-    """
-    Tests the get_flange_limits_from_csv() function, which reads flange
-    pressure limits as a function of temperature for various flange classes.
-
-    Conditions tested:
-        - proper error handling with bad .csv file name
-        - imported dataframe has correct keys
-        - imported dataframe has correct values and units
-        - non-float values are properly ignored
-        - proper error handling when a pressure value is negative
-    """
-    # ----------------------------INPUT TESTING----------------------------
-    # ensure proper handling when a bad material group is requested
-
-    # provide a bad input and the error that should result from it
-    my_input = 'batman'
-    bad_output = my_input + ' is not a valid group'
-
-    # ensure the error is handled properly
-    with pytest.raises(ValueError, match=bad_output):
-        tools.get_flange_limits_from_csv(my_input)
-
-    # ----------------------------OUTPUT TESTING---------------------------
-    # ensure proper output when a good material group is requested by
-    # comparing output to a known result
-
-    # file information
-    my_input = 'testfile'
-    file_directory = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                  '..', 'tube_design_tools', 'lookup_data')
-    file_name = 'ASME_B16_5_flange_ratings_group_' + my_input + '.csv'
-    file_location = os.path.relpath(os.path.join(file_directory, file_name))
-
-    # incorporate units with pint
-    ureg = pint.UnitRegistry()
-    quant = ureg.Quantity
-
-    # create test dataframe and write it to a .csv file
-    test_dataframe = pd.DataFrame(data=[[0, 1],     # temperatures
-                                        [2, 3]],    # pressures
-                                  columns=['Temperature', 'Class'])
-    test_dataframe.to_csv(file_location, index=False)
-
-    # add units to test dataframe
-    test_dataframe['Temperature'] = [quant(temp, ureg.degC) for temp in
-                                     test_dataframe['Temperature']]
-    test_dataframe['Class'] = [quant(pressure, ureg.bar) for pressure in
-                               test_dataframe['Class']]
-
-    # read in test dataframe using get_flange_limits_from_csv()
-    test_result = tools.get_flange_limits_from_csv(my_input)
-
-    # check that dataframes have the same number of keys and that they match
-    assert len(test_dataframe.keys()) == len(test_result.keys())
-    assert all(key1 == key2 for key1, key2 in zip(test_dataframe.keys(),
-                                                  test_result.keys()))
-
-    # flatten list of values and check that all dataframe values match
-    test_dataframe_values = [item for column in test_dataframe.values
-                             for item in column]
-    test_result_values = [item for column in test_result.values
-                          for item in column]
-    assert len(test_dataframe_values) == len(test_result_values)
-    assert all(val1 == val2 for val1, val2 in zip(test_dataframe_values,
-                                                  test_result_values))
-
-    # ensure rejection of tabulated pressures less than zero
-    with pytest.raises(ValueError, match='Pressure less than zero.'):
-        # create test dataframe and write it to a .csv file
-        test_dataframe = pd.DataFrame(data=[[0, 1],     # temperatures
-                                            [2, -3]],   # pressures
-                                      columns=['Temperature', 'Class'])
-        test_dataframe.to_csv(file_location, index=False)
-
-        # run the test
-        tools.get_flange_limits_from_csv(my_input)
-
-    # create .csv to test non-numeric pressure and temperature values
-    test_temperatures = [9, 's', 'd']
-    test_pressures = ['a', 3, 'f']
-    test_dataframe = pd.DataFrame({'Temperature': test_temperatures,
-                                   'Pressure': test_pressures})
-    test_dataframe.to_csv(file_location, index=False)
-
-    # ensure non-numeric pressures and temperatures are zeroed out
-    test_limits = tools.get_flange_limits_from_csv(my_input)
-    for index, my_temperature in enumerate(test_temperatures):
-        if isinstance(my_temperature, str):
-            assert test_limits.Temperature[index].magnitude == 0
-
-    # delete test .csv file from disk
-    os.remove(file_location)
 
 
 def test_lookup_flange_class():
@@ -196,11 +100,11 @@ def test_calculate_spiral_diameter():
 
     # define a pipe inner diameter and blockage ratio
     test_diameter = quant(5.76, ureg.inch)
-    test_blockage_ratio = 44
+    test_blockage_ratio = 0.44
 
     # define expected result and actual result
     expected_spiral_diameter = test_diameter / 2 * \
-        (1 - sqrt(1 - test_blockage_ratio / 100.))
+        (1 - sqrt(1 - test_blockage_ratio))
     result = tools.calculate_spiral_diameter(test_diameter,
                                              test_blockage_ratio)
 
@@ -212,10 +116,10 @@ def test_calculate_spiral_diameter():
         tools.calculate_spiral_diameter(test_diameter, 'doompity doo')
 
     # ensure proper handling with blockage ratio outside allowable limits
-    bad_blockage_ratios = [-35.124, 0, 100, 120.34]
+    bad_blockage_ratios = [-35.124, 0, 1, 120.34]
     for ratio in bad_blockage_ratios:
         with pytest.raises(ValueError,
-                           match='Blockage ratio outside of 0<BR<100'):
+                           match='Blockage ratio outside of 0<BR<1'):
             tools.calculate_spiral_diameter(test_diameter, ratio)
 
 
@@ -244,7 +148,7 @@ def test_calculate_blockage_ratio():
     # known good results from hand-calcs
     test_tube_diameter = quant(3.438, ureg.inch)
     test_blockage_diameter = quant(7./16., ureg.inch)
-    hand_calc_blockage_ratio = 0.444242326717679 * 100
+    hand_calc_blockage_ratio = 0.444242326717679
 
     # check for expected result with good input
     test_result = tools.calculate_blockage_ratio(test_tube_diameter,
@@ -416,24 +320,222 @@ def test_get_pipe_dlf():
         )
 
 
-# def test_calc_1_bolt_stress_area():
-#     ureg = pint.UnitRegistry()
-#     quant = ureg.Quantity
-#
-#     bolt_size = '1/2-13'
-#     bolt_class = '2A'
-#     test_max_stresses = [quant(101, 'ksi'), quant(99, 'ksi')]
-#     good_solutions = [0.13757, 0.14190]
-#     for (
-#             bolt_max_stress,
-#             solution
-#     ) in zip(
-#         test_max_stresses,
-#         good_solutions
-#     ):
-#         test_area = tools.calc_1_bolt_stress_area(
-#             bolt_size,
-#             bolt_class,
-#             bolt_max_stress
-#         )
-#         assert abs(test_area.to('in^2').magnitude - solution) < 1e-4
+def test_calculate_ddt_run_up():
+    ureg = pint.UnitRegistry()
+    quant = ureg.Quantity
+
+    # use a unit diameter to match diameter-specific values from plot
+    tube_diameter = quant(1, 'meter')
+
+    # define gas mixture and relevant pint quantities
+    mechanism = 'gri30.cti'
+    gas = ct.Solution(mechanism)
+    gas.TP = 300, 101325
+    initial_temperature = quant(gas.T, 'K')
+    initial_pressure = quant(gas.P, 'Pa')
+    gas.set_equivalence_ratio(1, 'CH4', {'O2': 1, 'N2': 3.76})
+    species_dict = gas.mole_fraction_dict()
+
+    # test with bad blockage ratio
+    bad_blockages = [-4., 0, 1]
+    for blockage_ratio in bad_blockages:
+        with pytest.raises(
+                ValueError,
+                match='Blockage ratio outside of correlation range'
+        ):
+            tools.calculate_ddt_run_up(
+                blockage_ratio,
+                tube_diameter,
+                initial_temperature,
+                initial_pressure,
+                species_dict,
+                mechanism
+            )
+
+    # define good blockage ratios and expected result from each
+    good_blockages = [0.1, 0.2, 0.3, 0.75]
+    good_results = [
+        48.51385390428211,
+        29.24433249370277,
+        18.136020151133494,
+        4.76070528967254
+    ]
+
+    # test with good inputs
+    for blockage_ratio, result in zip(good_blockages, good_results):
+        test_runup = tools.calculate_ddt_run_up(
+            blockage_ratio,
+            tube_diameter,
+            initial_temperature,
+            initial_pressure,
+            species_dict,
+            mechanism,
+            phase_specification='gri30_mix'
+        )
+
+        assert (
+                test_runup.units.format_babel() ==
+                tube_diameter.units.format_babel()
+        )
+
+        assert 0.5 * result <= test_runup.magnitude <= 1.5 * result
+
+
+def test_calculate_bolt_stress_areas():
+    ureg = pint.UnitRegistry()
+    quant = ureg.Quantity
+
+    def compare(manual, tested):
+        for key, value in manual.items():
+            test_value = tested[key].to(
+                value.units.format_babel()).magnitude
+            value = value.magnitude
+            assert abs(test_value - value) / value < 1e-4
+
+    # test bolt > 100ksi
+    thread_size = '1/4-28'
+    thread_class = '2'
+    bolt_max_tensile = quant(120, 'ksi')
+    plate_max_tensile = quant(30, 'ksi')
+    engagement_length = quant(0.5, 'in')
+    hand_calc = {
+        'screw area': quant(0.034934049, 'in^2'),
+        'plate area': quant(0.308744082, 'in^2'),
+        'minimum engagement': quant(0.452595544, 'in')
+    }
+    test_areas = tools.calculate_bolt_stress_areas(
+        thread_size,
+        thread_class,
+        bolt_max_tensile,
+        plate_max_tensile,
+        engagement_length
+    )
+    compare(hand_calc, test_areas)
+
+    # test bolt < 100ksi
+    bolt_max_tensile = quant(80, 'ksi')
+    hand_calc['screw area'] = quant(
+        0.036374073,
+        'in^2'
+    )
+    hand_calc['minimum engagement'] = quant(
+        0.314168053,
+        'in'
+    )
+    test_areas = tools.calculate_bolt_stress_areas(
+        thread_size,
+        thread_class,
+        bolt_max_tensile,
+        plate_max_tensile,
+        engagement_length
+    )
+    compare(hand_calc, test_areas)
+
+    # ensure warning when engagement length < minimum
+    engagement_length = quant(0.05, 'in')
+    with pytest.warns(
+        Warning,
+        match='Screws fail in shear, not tension.' +
+              ' Plate may be damaged.' +
+              ' Consider increasing bolt engagement length'
+    ):
+        tools.calculate_bolt_stress_areas(
+            thread_size,
+            thread_class,
+            bolt_max_tensile,
+            plate_max_tensile,
+            engagement_length
+        )
+
+
+def test_calculate_window_bolt_sf():
+    ureg = pint.UnitRegistry()
+    quant = ureg.Quantity
+
+    def compare(manual, tested):
+        for key, value in manual.items():
+            test_value = tested[key].to('').magnitude
+            assert abs(test_value - value) / value < 1e-4
+
+    max_pressure = quant(1631.7, 'psi')
+    window_area = quant(5.75*2.5, 'in^2')
+    num_bolts = 20
+    thread_size = '1/4-28'
+    thread_class = '2'
+    bolt_max_tensile = quant(120, 'ksi')
+    plate_max_tensile = quant(30, 'ksi')
+    engagement_length = quant(0.5, 'in')
+
+    hand_calc = {
+        'bolt': 3.606968028,
+        'plate': 7.969517321,
+    }
+
+    test_values = tools.calculate_window_bolt_sf(
+        max_pressure,
+        window_area,
+        num_bolts,
+        thread_size,
+        thread_class,
+        bolt_max_tensile,
+        plate_max_tensile,
+        engagement_length
+    )
+
+    compare(hand_calc, test_values)
+
+
+def test_calculate_max_initial_pressure():
+        ureg = pint.UnitRegistry()
+        quant = ureg.Quantity
+
+        # define required variables
+        pipe_material = '316L'
+        pipe_schedule = '80'
+        pipe_nps = '6'
+        welded = False
+        desired_fs = 4
+        initial_temperature = quant(300, 'K')
+        species_dict = {'H2': 1, 'O2': 0.5}
+        mechanism = 'gri30.cti'
+        max_pressures = [quant(1200, 'psi'), False]
+        error_tol = 1e-4
+
+        max_solutions = [max_pressures[0], quant(149.046409603932, 'atm')]
+
+        # test function output
+        for max_pressure, max_solution in zip(max_pressures, max_solutions):
+            test_result = tools.calculate_max_initial_pressure(
+                pipe_material,
+                pipe_schedule,
+                pipe_nps,
+                welded,
+                desired_fs,
+                initial_temperature,
+                species_dict,
+                mechanism,
+                max_pressure=max_pressure,
+                error_tol=error_tol
+            )
+
+            states = tools.calculate_reflected_shock_state(
+                test_result,
+                initial_temperature,
+                species_dict,
+                mechanism
+            )
+
+            # get dynamic load factor
+            dlf = tools.get_pipe_dlf(
+                pipe_material,
+                pipe_schedule,
+                pipe_nps,
+                states['cj']['speed']
+            )
+
+            calc_max = states['reflected']['state'].P
+            max_solution = max_solution.to('Pa').magnitude / dlf
+
+            error = abs(max_solution - calc_max) / max_solution
+
+            assert error <= 0.0005

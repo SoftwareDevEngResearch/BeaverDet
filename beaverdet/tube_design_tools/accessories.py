@@ -20,6 +20,72 @@ import pandas as pd
 import cantera as ct
 
 
+def get_flange_limits_from_csv(
+        group=2.3
+):
+    """
+    Reads in flange pressure limits as a function of temperature for different
+    pressure classes per ASME B16.5. Temperature is in Centigrade and pressure
+    is in bar.
+
+    Inputs:
+        group: float or string of ASME B16.5 material group (defaults to 2.3).
+             Only groups 2.1, 2.2, and 2.3 are included in the current release.
+
+    Outputs:
+        flange_limits: pandas dataframe, the first column of which is
+             temperature. All other columns' keys are flange classes, and the
+             values are the appropriate pressure limits in bar.
+    """
+
+    # ensure group is valid
+    group = str(group).replace('.', '_')
+    file_directory = os.path.join(os.path.dirname(os.path.relpath(__file__)),
+                                  'lookup_data')
+    file_name = 'ASME_B16_5_flange_ratings_group_' + group + '.csv'
+    file_location = os.path.relpath(os.path.join(file_directory, file_name))
+
+    # initialize unit registry and quantity for unit handling
+    ureg = pint.UnitRegistry()
+    quant = ureg.Quantity
+    if os.path.exists(file_location):
+        # import the correct .csv file as a pandas dataframe
+        flange_limits = pd.read_csv(file_location)
+
+        # ensure all temperatures and pressures are floats, and check to make
+        # sure pressures are greater than zero
+        values = flange_limits.values
+        for row_number, row in enumerate(values):
+            for column_number, item in enumerate(row):
+                # ensure each item is a float and assign non-numeric values
+                # a value of zero
+                try:
+                    values[row_number][column_number] = float(item)
+                except ValueError:
+                    values[row_number][column_number] = 0.
+
+                if column_number > 0:
+                    # these are pressures, which must be positive
+                    if values[row_number][column_number] < 0:
+                        raise ValueError('Pressure less than zero.')
+
+        # add units to temperature column
+        flange_limits['Temperature'] = [quant(temp, ureg.degC) for temp in
+                                        flange_limits['Temperature']]
+
+        # add units to pressure columns
+        for key in flange_limits.keys():
+            if key != 'Temperature':
+                flange_limits[key] = [quant(pressure, ureg.bar) for pressure in
+                                      flange_limits[key]]
+
+        return flange_limits
+
+    else:
+        # the user gave a bad group label
+        raise ValueError('{0} is not a valid group'.format(group))
+
+
 def check_materials():
     """
     Makes sure that the materials in materials_list.csv have stress limits and
@@ -28,7 +94,7 @@ def check_materials():
     # collect files
     file_directory = os.path.join(
         os.path.dirname(
-            os.path.abspath(__file__)
+            os.path.relpath(__file__)
         ),
         'lookup_data'
     )
@@ -107,7 +173,7 @@ def collect_tube_materials():
     """
     file_directory = os.path.join(
         os.path.dirname(
-            os.path.abspath(__file__)
+            os.path.relpath(__file__)
         ),
         'lookup_data'
     )
@@ -173,6 +239,7 @@ def check_pint_quantity(
 
     Currently supported dimension types:
         length
+        area
         pressure
         temperature
         velocity
@@ -196,6 +263,7 @@ def check_pint_quantity(
     ureg = pint.UnitRegistry()
     units = {
         'length': ureg.meter.dimensionality.__str__(),
+        'area': (ureg.meter**2).dimensionality.__str__(),
         'temperature': ureg.degC.dimensionality.__str__(),
         'pressure': ureg.psi.dimensionality.__str__(),
         'velocity': (ureg.meter/ureg.second).dimensionality.__str__()
@@ -335,6 +403,7 @@ def calculate_laminar_flamespeed(
         initial_pressure,
         species_dict,
         mechanism,
+        phase_specifation=''
 ):
     """
     This function uses cantera to calculate the laminar flame speed of a given
@@ -350,12 +419,14 @@ def calculate_laminar_flamespeed(
         Dictionary with species names (all caps) as keys and moles as values
     mechanism : str
         String of mechanism to use (e.g. 'gri30.cti')
+    phase_specifation : str
+        Phase specification for cantera solution
 
     Returns
     -------
     Laminar flame speed in m/s as a pint quantity
     """
-    gas = ct.Solution(mechanism)
+    gas = ct.Solution(mechanism, phase_specifation)
 
     ureg = pint.UnitRegistry()
     quant = ureg.Quantity
@@ -409,7 +480,7 @@ def import_pipe_schedules():
     """
     file_directory = os.path.join(
         os.path.dirname(
-            os.path.abspath(__file__)
+            os.path.relpath(__file__)
         ),
         'lookup_data'
     )
@@ -472,7 +543,7 @@ def get_pipe_dimensions(
 
     Returns
     -------
-    list
+    dict
         [outer diameter, inner diameter, wall thickness] as pint quantities
 
     """
@@ -498,9 +569,9 @@ def get_pipe_dimensions(
     wall_thickness = pipe_schedule_dataframe[pipe_schedule][nominal_size]
     inner_diameter = outer_diameter - 2 * wall_thickness
 
-    return [quant(outer_diameter, ureg.inch),
-            quant(inner_diameter, ureg.inch),
-            quant(wall_thickness, ureg.inch)]
+    return {'outer diameter': quant(outer_diameter, ureg.inch),
+            'inner diameter': quant(inner_diameter, ureg.inch),
+            'wall thickness': quant(wall_thickness, ureg.inch)}
 
 
 def import_thread_specs():
@@ -515,7 +586,7 @@ def import_thread_specs():
     """
     file_directory = os.path.join(
         os.path.dirname(
-            os.path.abspath(__file__)
+            os.path.relpath(__file__)
         ),
         'lookup_data'
     )
@@ -623,3 +694,114 @@ def get_thread_tpi(
         Integer number of threads per inch
     """
     return int(thread_size.split('-')[-1])
+
+
+def get_equil_sound_speed(
+        temperature,
+        pressure,
+        species_dict,
+        mechanism,
+        phase_specification=''
+):
+    """
+    Calculates the equilibrium speed of sound in a mixture
+
+    Parameters
+    ----------
+    temperature : pint quantity
+        Initial mixture temperature
+    pressure : pint quantity
+        Initial mixture pressure
+    species_dict : dict
+        Dictionary of mixture mole fractions
+    mechanism : str
+        Desired chemical mechanism
+    phase_specification : str
+        Phase specification for cantera solution
+
+    Returns
+    -------
+    sound_speed : pint quantity
+        local speed of sound in m/s
+    """
+    ureg = pint.UnitRegistry()
+    quant = ureg.Quantity
+
+    check_pint_quantity(
+        pressure,
+        'pressure',
+        ensure_positive=True
+    )
+
+    check_pint_quantity(
+        temperature,
+        'temperature',
+        ensure_positive=True
+    )
+
+    working_gas = ct.Solution(mechanism, phase_specification)
+    working_gas.TPX = [
+        temperature.to('K').magnitude,
+        pressure.to('Pa').magnitude,
+        species_dict
+        ]
+
+    pressures = np.zeros(2)
+    densities = np.zeros(2)
+
+    # equilibrate gas at input conditions and collect pressure, density
+    working_gas.equilibrate('TP')
+    pressures[0] = working_gas.P
+    densities[0] = working_gas.density
+
+    # perturb pressure and equilibrate with constant P, s to get dp/drho|s
+    pressures[1] = 1.0001 * pressures[0]
+    working_gas.SP = working_gas.s, pressures[1]
+    working_gas.equilibrate('SP')
+    densities[1] = working_gas.density
+
+    # calculate sound speed
+    sound_speed = np.sqrt(np.diff(pressures)/np.diff(densities))[0]
+
+    return quant(sound_speed, 'm/s')
+
+
+def get_pipe_stress_limits(
+        material,
+        welded=False
+):
+    check_materials()
+
+    # collect files
+    file_directory = os.path.join(
+        os.path.dirname(
+            os.path.relpath(__file__)
+        ),
+        'lookup_data'
+    )
+    file_name = 'ASME_B31_1_stress_limits_'
+    if welded:
+        file_name += 'welded.csv'
+    else:
+        file_name += 'seamless.csv'
+    file_location = os.path.join(
+        file_directory,
+        file_name
+    )
+    material_limits = pd.read_csv(file_location, index_col=0)
+
+    if material not in material_limits.keys():
+        raise KeyError('material not found')
+
+    material_limits = material_limits[material]
+
+    # apply units
+    limits = {
+        'temperature': ('degF', []),
+        'stress': ('ksi', [])
+    }
+    for temp, stress in material_limits.items():
+        limits['temperature'][1].append(temp)
+        limits['stress'][1].append(stress)
+
+    return limits
