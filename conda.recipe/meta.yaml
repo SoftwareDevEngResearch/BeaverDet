@@ -21,6 +21,9 @@ requirements:
     - pandas
     - sympy
     - cantera
+    - sd2 >= 0.1.1b
+    - nptdms
+    - scipy
 
 test:
   imports:
@@ -30,6 +33,7 @@ test:
     - pandas
     - sympy
     - cantera
+    - mock
 
   requires:
     - pytest
